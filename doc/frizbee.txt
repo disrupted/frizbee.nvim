@@ -1,0 +1,190 @@
+*frizbee.txt*  High-performance fuzzy matching for Neovim
+
+Author:  disrupted
+License: MIT
+Repo:    https://github.com/disrupted/frizbee.nvim
+
+==============================================================================
+CONTENTS                                                      *frizbee-contents*
+
+  1. Introduction .......................... |frizbee-intro|
+  2. Installation .......................... |frizbee-install|
+  3. Building the native module ............ |frizbee-build|
+  4. API ................................... |frizbee-api|
+     4.1  match() .......................... |frizbee.match|
+     4.2  match_indices() .................. |frizbee.match_indices|
+     4.3  health() ......................... |frizbee.health|
+  5. Health check .......................... |frizbee-health|
+  6. Troubleshooting ....................... |frizbee-troubleshooting|
+
+==============================================================================
+1. INTRODUCTION                                                  *frizbee-intro*
+
+frizbee.nvim wraps the native Rust fuzzy-matching library `frizbee` and
+exposes a stable Lua API.  The native backend is compiled to a shared library
+(`frizbee_nvim`) and loaded automatically at first call.
+
+No global state is created at startup; the backend is loaded lazily.
+
+==============================================================================
+2. INSTALLATION                                                *frizbee-install*
+
+Using lazy.nvim: >lua
+
+  {
+    "disrupted/frizbee.nvim",
+    build = "cargo build --release",
+  }
+<
+The `build` step compiles the native library.  Rust 1.85+ is required.
+
+==============================================================================
+3. BUILDING THE NATIVE MODULE                                    *frizbee-build*
+
+Run inside the plugin directory: >sh
+
+  cargo build --release
+<
+Output locations:
+
+  Platform   File                              Path
+  --------   ----                              ----
+  macOS      libfrizbee_nvim.dylib             target/release/
+  Linux      libfrizbee_nvim.so                target/release/
+  Windows    frizbee_nvim.dll                  target/release/
+
+The loader patches `package.cpath` automatically; no manual symlinking is
+required.
+
+==============================================================================
+4. API                                                             *frizbee-api*
+
+All functions are accessed via: >lua
+
+  local frizbee = require('frizbee')
+<
+------------------------------------------------------------------------------
+4.1  match()                                                    *frizbee.match*
+
+Signature: >lua
+  frizbee.match(query, texts, opts?) -> matches
+<
+Fuzzy-match `query` against an array of strings.  Returns ranked results.
+
+Parameters:
+  {query}   string     The search query.
+  {texts}   string[]   Array of candidate strings.
+  {opts}    table|nil  Optional settings (see below).
+
+Options (all optional):
+  max_typos      integer|nil   Max allowed missing chars.  Default: 0.
+                               nil = unlimited tolerance.
+  limit          integer|nil   Max results to return.  Default: nil (all).
+  sort           boolean|nil   Sort by score descending.  Default: true.
+  with_positions boolean|nil   Include match positions.  Default: false.
+  case_sensitive boolean|nil   Case-sensitive matching.  Default: false.
+
+Returns: `table[]` — array of match tables: >lua
+  {
+    index     = integer,       -- 1-based index into the input texts array
+    score     = number,        -- match score (higher = better)
+    exact     = boolean,       -- whether the match is exact
+    positions = integer[]|nil, -- 1-based positions (only with with_positions)
+  }
+<
+Empty query: returns all items with score=0 and exact=false, capped by limit.
+
+Example: >lua
+  local matches = frizbee.match("src", {
+    "src/main.rs",
+    "src/lib.rs",
+    "Cargo.toml",
+  }, { limit = 10 })
+
+  for _, m in ipairs(matches) do
+    print(m.index, m.score, m.exact)
+  end
+<
+------------------------------------------------------------------------------
+4.2  match_indices()                                    *frizbee.match_indices*
+
+Signature: >lua
+  frizbee.match_indices(query, text, opts?) -> integer[]|nil
+<
+Return 1-based match positions for a single query/text pair.
+
+Parameters:
+  {query}   string     The search query.
+  {text}    string     A single candidate string.
+  {opts}    table|nil  Same options as |frizbee.match| (only max_typos and
+                       case_sensitive are relevant).
+
+Returns: `integer[]` of 1-based positions, or `nil` if no match or the query
+is empty.
+
+Example: >lua
+  local pos = frizbee.match_indices("fb", "fooBar")
+  -- pos = { 1, 4 }
+<
+------------------------------------------------------------------------------
+4.3  health()                                                  *frizbee.health*
+
+Signature: >lua
+  frizbee.health() -> table
+<
+Return native module metadata.  Safe to call before the backend loads;
+returns loader diagnostics on failure instead of raising an error.
+
+Returns on success: >lua
+  {
+    backend  = "rust",
+    module   = "frizbee_nvim",
+    version  = "0.1.0",
+    features = { "fuzzy_match", "match_indices", "case_sensitive",
+                 "typo_tolerance" },
+  }
+<
+Returns on failure: >lua
+  {
+    error    = string,   -- load error message
+    platform = string,   -- detected platform
+    ext      = string,   -- expected library extension
+    searched = string[], -- paths that were tried
+  }
+<
+==============================================================================
+5. HEALTH CHECK                                                *frizbee-health*
+
+Run from Neovim: >vim
+
+  :checkhealth frizbee
+<
+Reports:
+  - Detected platform and library extension.
+  - Paths searched during loading.
+  - Whether the native module loaded successfully.
+  - Native version and feature list (when loaded).
+
+==============================================================================
+6. TROUBLESHOOTING                                       *frizbee-troubleshooting*
+
+Native module not found ~
+  Run `cargo build --release` in the plugin directory and restart Neovim.
+  The loader searches `target/release/` relative to the plugin root
+  automatically.
+
+Wrong architecture / ABI ~
+  Ensure the Rust toolchain targets the same architecture as Neovim's LuaJIT.
+  On Apple Silicon with a native Neovim build, a universal or arm64 Rust
+  target is required.
+
+Multiple Neovim/LuaJIT versions ~
+  The shared library is linked against the LuaJIT ABI.  If you switch between
+  Neovim builds, rebuild the native module.
+
+`:checkhealth frizbee` shows searched paths ~
+  The loader appends candidate patterns to `package.cpath` at load time.
+  Verify the plugin root is resolved correctly (the path shown in the health
+  output should match your actual filesystem layout).
+
+ vim:tw=78:ts=8:ft=help:norl:

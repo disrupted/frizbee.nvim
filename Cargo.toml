@@ -1,0 +1,18 @@
+[package]
+name = "frizbee-nvim"
+version = "0.1.0"
+edition = "2024"
+description = "High-performance fuzzy matching Lua module for Neovim, powered by frizbee"
+license = "MIT"
+
+[lib]
+# cdylib for the loadable Lua module, rlib for tests and bench binary
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "bench"
+path = "src/bench.rs"
+
+[dependencies]
+frizbee = "0.8.2"
+mlua = { version = "0.11.6", features = ["module", "luajit"] }
