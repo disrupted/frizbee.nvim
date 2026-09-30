@@ -1,4 +1,4 @@
-use frizbee::{Config, match_list, match_list_indices};
+use frizbee::{CaseMatching, Config, Matcher, Matching, SortStrategy, UnicodeMatching};
 use mlua::prelude::*;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -8,7 +8,6 @@ struct MatchOpts {
     config: Config,
     limit: Option<usize>,
     with_positions: bool,
-    case_sensitive: bool,
 }
 
 impl MatchOpts {
@@ -16,12 +15,11 @@ impl MatchOpts {
         let mut result = Self {
             config: Config {
                 max_typos: Some(0),
-                sort: true,
+                sort: SortStrategy::ScoreThenIndexAsc,
                 ..Config::default()
             },
             limit: None,
             with_positions: false,
-            case_sensitive: false,
         };
 
         let Some(opts) = opts else {
@@ -31,8 +29,20 @@ impl MatchOpts {
         if let Some(max_typos) = opts.get::<Option<u16>>("max_typos")? {
             result.config.max_typos = Some(max_typos);
         }
-        if let Some(sort) = opts.get::<Option<bool>>("sort")? {
-            result.config.sort = sort;
+        if let Some(casing) = opts.get::<Option<LuaString>>("casing")? {
+            let casing = casing.to_str()?;
+            result.config.casing = parse_casing(&casing)?;
+        }
+        if let Some(unicode) = opts.get::<Option<LuaString>>("unicode")? {
+            let unicode = unicode.to_str()?;
+            result.config.unicode = parse_unicode(&unicode)?;
+        }
+        if let Some(matching) = opts.get::<Option<LuaString>>("matching")? {
+            let matching = matching.to_str()?;
+            result.config.matching = parse_matching(&matching)?;
+        }
+        if let Some(sort) = opts.get::<Option<LuaValue>>("sort")? {
+            result.config.sort = parse_sort(sort)?;
         }
         if let Some(limit) = opts.get::<Option<usize>>("limit")? {
             if limit == 0 {
@@ -43,30 +53,64 @@ impl MatchOpts {
         if let Some(with_positions) = opts.get::<Option<bool>>("with_positions")? {
             result.with_positions = with_positions;
         }
-        if let Some(case_sensitive) = opts.get::<Option<bool>>("case_sensitive")? {
-            result.case_sensitive = case_sensitive;
-        }
 
         Ok(result)
     }
 }
 
-/// Lowercases a query string for case-insensitive matching.
-/// Only allocates when case_sensitive is false.
-fn prepare_query(query: &str, case_sensitive: bool) -> String {
-    if case_sensitive {
-        query.to_string()
-    } else {
-        query.to_lowercase()
+fn parse_casing(value: &str) -> LuaResult<CaseMatching> {
+    match value {
+        "smart" => Ok(CaseMatching::Smart),
+        "ignore" => Ok(CaseMatching::Ignore),
+        "respect" => Ok(CaseMatching::Respect),
+        other => Err(LuaError::runtime(format!(
+            "invalid opts.casing: {other:?} (expected 'smart', 'ignore', or 'respect')"
+        ))),
     }
 }
 
-/// Lowercases a haystack string for case-insensitive matching.
-fn prepare_haystack(text: &str, case_sensitive: bool) -> String {
-    if case_sensitive {
-        text.to_string()
-    } else {
-        text.to_lowercase()
+fn parse_unicode(value: &str) -> LuaResult<UnicodeMatching> {
+    match value {
+        "smart" => Ok(UnicodeMatching::Smart),
+        "ignore" => Ok(UnicodeMatching::Ignore),
+        "always" => Ok(UnicodeMatching::Always),
+        other => Err(LuaError::runtime(format!(
+            "invalid opts.unicode: {other:?} (expected 'smart', 'ignore', or 'always')"
+        ))),
+    }
+}
+
+fn parse_matching(value: &str) -> LuaResult<Matching> {
+    match value {
+        "fuzzy" => Ok(Matching::Fuzzy),
+        "exact" => Ok(Matching::Exact),
+        "prefix" => Ok(Matching::Prefix),
+        "suffix" => Ok(Matching::Suffix),
+        "substring" => Ok(Matching::Substring),
+        other => Err(LuaError::runtime(format!(
+            "invalid opts.matching: {other:?} (expected 'fuzzy', 'exact', 'prefix', 'suffix', or 'substring')"
+        ))),
+    }
+}
+
+fn parse_sort(value: LuaValue) -> LuaResult<SortStrategy> {
+    match value {
+        LuaValue::String(s) => {
+            let s = s.to_str()?;
+            match &*s {
+                "score" => Ok(SortStrategy::ScoreThenIndexAsc),
+                "score_reverse" => Ok(SortStrategy::ScoreThenIndexDesc),
+                "index" => Ok(SortStrategy::IndexAsc),
+                "index_reverse" => Ok(SortStrategy::IndexDesc),
+                other => Err(LuaError::runtime(format!(
+                    "invalid opts.sort: {other:?} (expected 'score', 'score_reverse', 'index', or 'index_reverse')"
+                ))),
+            }
+        }
+        other => Err(LuaError::runtime(format!(
+            "invalid opts.sort of type {} (expected a string)",
+            other.type_name()
+        ))),
     }
 }
 
@@ -83,20 +127,12 @@ fn lua_match(
     (query, texts, opts): (String, Vec<String>, Option<LuaTable>),
 ) -> LuaResult<LuaTable> {
     let match_opts = MatchOpts::from_lua_opt(opts)?;
-    let prepared_query = prepare_query(&query, match_opts.case_sensitive);
-
-    // Prepare haystacks for matching (lowercase if case-insensitive)
-    let prepared_texts: Vec<String> = texts
-        .iter()
-        .map(|t| prepare_haystack(t, match_opts.case_sensitive))
-        .collect();
-
-    let prepared_refs: Vec<&str> = prepared_texts.iter().map(|s| s.as_str()).collect();
+    let mut matcher = Matcher::new(query.as_str(), &match_opts.config);
 
     let result = lua.create_table()?;
 
     if match_opts.with_positions {
-        let matches = match_list_indices(&prepared_query, &prepared_refs, &match_opts.config);
+        let matches = matcher.match_list_indices(&texts);
 
         let limit = match_opts.limit.unwrap_or(matches.len());
         for (i, m) in matches.into_iter().take(limit).enumerate() {
@@ -116,7 +152,7 @@ fn lua_match(
             result.set(i + 1, entry)?;
         }
     } else {
-        let matches = match_list(&prepared_query, &prepared_refs, &match_opts.config);
+        let matches = matcher.match_list(&texts);
 
         let limit = match_opts.limit.unwrap_or(matches.len());
         for (i, m) in matches.into_iter().take(limit).enumerate() {
@@ -139,20 +175,14 @@ fn lua_match_indices(
     (query, text, opts): (String, String, Option<LuaTable>),
 ) -> LuaResult<LuaValue> {
     let match_opts = MatchOpts::from_lua_opt(opts)?;
-    let prepared_query = prepare_query(&query, match_opts.case_sensitive);
-    let prepared_text = prepare_haystack(&text, match_opts.case_sensitive);
 
-    if prepared_query.is_empty() {
+    if query.is_empty() {
         return Ok(LuaValue::Nil);
     }
 
-    let matches = match_list_indices(
-        &prepared_query,
-        &[prepared_text.as_str()],
-        &match_opts.config,
-    );
+    let mut matcher = Matcher::new(query.as_str(), &match_opts.config);
 
-    match matches.into_iter().next() {
+    match matcher.match_one_indices(text.as_str(), 0) {
         Some(m) => {
             let positions = lua.create_table()?;
             for (j, &pos) in m.indices.iter().enumerate() {
@@ -176,8 +206,11 @@ fn lua_health(lua: &Lua, _: ()) -> LuaResult<LuaTable> {
     let features = lua.create_table()?;
     features.set(1, "fuzzy_match")?;
     features.set(2, "match_indices")?;
-    features.set(3, "case_sensitive")?;
-    features.set(4, "typo_tolerance")?;
+    features.set(3, "casing")?;
+    features.set(4, "matching_modes")?;
+    features.set(5, "unicode_matching")?;
+    features.set(6, "sort_strategies")?;
+    features.set(7, "typo_tolerance")?;
     info.set("features", features)?;
 
     Ok(info)
@@ -198,6 +231,14 @@ fn frizbee_nvim(lua: &Lua) -> LuaResult<LuaTable> {
 mod tests {
     use super::*;
 
+    fn sort_strategy(sort: bool) -> SortStrategy {
+        if sort {
+            SortStrategy::ScoreThenIndexAsc
+        } else {
+            SortStrategy::IndexAsc
+        }
+    }
+
     // Helper: run match_list directly (no Lua) to test the core logic paths
     fn do_match(
         query: &str,
@@ -207,10 +248,10 @@ mod tests {
     ) -> Vec<frizbee::Match> {
         let config = Config {
             max_typos,
-            sort,
+            sort: sort_strategy(sort),
             ..Config::default()
         };
-        match_list(query, texts, &config)
+        Matcher::new(query, &config).match_list(texts)
     }
 
     fn do_match_indices(
@@ -220,10 +261,10 @@ mod tests {
     ) -> Vec<frizbee::MatchIndices> {
         let config = Config {
             max_typos,
-            sort: true,
+            sort: SortStrategy::ScoreThenIndexAsc,
             ..Config::default()
         };
-        match_list_indices(query, texts, &config)
+        Matcher::new(query, &config).match_list_indices(texts)
     }
 
     // --- Basic match ordering ---
@@ -363,7 +404,7 @@ mod tests {
 
         // All positions must be valid indices into "fooBar"
         for &pos in &m.indices {
-            assert!(pos < "fooBar".len());
+            assert!((pos as usize) < "fooBar".len());
         }
     }
 
@@ -413,19 +454,66 @@ mod tests {
     // --- Case sensitivity ---
 
     #[test]
-    fn test_case_insensitive_matching() {
-        // Simulate what the Lua layer does: lowercase both query and texts
-        let query = "FOO".to_lowercase();
-        let texts_raw = ["FooBar", "foobar", "FOOBAR"];
-        let texts_lower: Vec<String> = texts_raw.iter().map(|t| t.to_lowercase()).collect();
-        let refs: Vec<&str> = texts_lower.iter().map(|s| s.as_str()).collect();
-
-        let matches = do_match(&query, &refs, Some(0), true);
+    fn test_casing_ignore_matches_all_variants() {
+        let config = Config {
+            max_typos: Some(0),
+            casing: CaseMatching::Ignore,
+            ..Config::default()
+        };
+        let matches = Matcher::new("FOO", &config).match_list(&["FooBar", "foobar", "FOOBAR"]);
         assert_eq!(
             matches.len(),
             3,
             "case-insensitive should match all variants"
         );
+    }
+
+    #[test]
+    fn test_casing_respect_excludes_wrong_case() {
+        let config = Config {
+            max_typos: Some(0),
+            casing: CaseMatching::Respect,
+            sort: SortStrategy::IndexAsc,
+            ..Config::default()
+        };
+        let matches = Matcher::new("foo", &config).match_list(&["foo", "FOO", "fOo", "xxfooxx"]);
+        let indices: Vec<u32> = matches.iter().map(|m| m.index).collect();
+        assert_eq!(indices, vec![0, 3]);
+    }
+
+    #[test]
+    fn test_casing_smart_respects_uppercase_needle() {
+        let config = Config {
+            max_typos: Some(0),
+            casing: CaseMatching::Smart,
+            sort: SortStrategy::IndexAsc,
+            ..Config::default()
+        };
+        let matches = Matcher::new("FoO", &config).match_list(&["foo", "FOO", "FoO", "xxFoOxx"]);
+        let indices: Vec<u32> = matches.iter().map(|m| m.index).collect();
+        assert_eq!(indices, vec![2, 3]);
+    }
+
+    // --- Matching modes ---
+
+    #[test]
+    fn test_matching_prefix() {
+        let config = Config {
+            matching: Matching::Prefix,
+            ..Config::default()
+        };
+        let matches = Matcher::new("foo", &config).match_list(&["foobar", "barfoo", "foo"]);
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn test_matching_substring() {
+        let config = Config {
+            matching: Matching::Substring,
+            ..Config::default()
+        };
+        let matches = Matcher::new("foo", &config).match_list(&["xxfoo", "bar", "foo"]);
+        assert_eq!(matches.len(), 2);
     }
 
     // --- Sort option ---
@@ -438,6 +526,9 @@ mod tests {
 
         // Both should have same items
         assert_eq!(unsorted.len(), sorted.len());
+        // Unsorted (IndexAsc) preserves input order
+        let indices: Vec<u32> = unsorted.iter().map(|m| m.index).collect();
+        assert_eq!(indices, vec![0, 1, 2]);
     }
 
     // --- Large input ---

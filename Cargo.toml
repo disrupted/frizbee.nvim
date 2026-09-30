@@ -9,10 +9,15 @@ license = "MIT"
 # cdylib for the loadable Lua module, rlib for tests and bench binary
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Opt-in feature for the `bench` binary so a plain `cargo build`/`test` skips it.
+bench = []
+
 [[bin]]
 name = "bench"
 path = "src/bench.rs"
+required-features = ["bench"]
 
 [dependencies]
-frizbee = "0.8.2"
-mlua = { version = "0.11.6", features = ["module", "luajit"] }
+frizbee = "0.13.0"
+mlua = { version = "0.12.1", features = ["luajit", "module"] }

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use frizbee::{Config, match_list, match_list_indices};
+use frizbee::{Config, Matcher, SortStrategy};
 
 fn bench<F: FnMut()>(label: &str, iterations: u32, mut f: F) {
     // Warmup
@@ -73,13 +73,13 @@ fn main() {
 
     let config_no_typos = Config {
         max_typos: Some(0),
-        sort: true,
+        sort: SortStrategy::ScoreThenIndexAsc,
         ..Config::default()
     };
 
     let config_with_typos = Config {
         max_typos: Some(1),
-        sort: true,
+        sort: SortStrategy::ScoreThenIndexAsc,
         ..Config::default()
     };
 
@@ -91,7 +91,7 @@ fn main() {
 
         for &query in &queries {
             bench(&format!("match(\"{query}\", {size})"), iterations, || {
-                let _ = match_list(query, &refs, &config_no_typos);
+                let _ = Matcher::new(query, &config_no_typos).match_list(&refs);
             });
         }
 
@@ -100,7 +100,7 @@ fn main() {
             &format!("match_indices(\"src\", {size})"),
             iterations,
             || {
-                let _ = match_list_indices("src", &refs, &config_no_typos);
+                let _ = Matcher::new("src", &config_no_typos).match_list_indices(&refs);
             },
         );
 
@@ -109,7 +109,7 @@ fn main() {
             &format!("match(\"src\", {size}, typos=1)"),
             iterations,
             || {
-                let _ = match_list("src", &refs, &config_with_typos);
+                let _ = Matcher::new("src", &config_with_typos).match_list(&refs);
             },
         );
 

@@ -41,9 +41,15 @@ end
 ---@param opts  table|nil       Optional settings:
 ---   - max_typos      integer|nil   Max allowed missing chars (default 0, nil = unlimited).
 ---   - limit          integer|nil   Max results to return (default nil = all).
----   - sort           boolean|nil   Sort by score descending (default true).
+---   - sort           string|nil    Result ordering (default 'score').
+---                                     'score'         => score desc, index asc
+---                                     'score_reverse' => score desc, index desc
+---                                     'index'         => input order
+---                                     'index_reverse' => reverse input order
 ---   - with_positions boolean|nil   Include match positions in results (default false).
----   - case_sensitive boolean|nil   Case-sensitive matching (default false).
+---   - casing         string|nil    'smart' (default) | 'ignore' | 'respect'.
+---   - matching       string|nil    'fuzzy' (default) | 'exact' | 'prefix' | 'suffix' | 'substring'.
+---   - unicode        string|nil    'smart' (default) | 'ignore' | 'always'.
 ---@return table[]  matches  Array of { index, score, exact, positions? }
 function M.match(query, texts, opts)
   return backend().match(query, texts, opts)
@@ -53,7 +59,8 @@ end
 ---
 ---@param query string       The search query.
 ---@param text  string       A single candidate string.
----@param opts  table|nil    Same options as match() (only max_typos, case_sensitive are used).
+---@param opts  table|nil    Same options as match() (only max_typos, casing,
+---                          matching, and unicode are used).
 ---@return integer[]|nil     1-based positions, or nil if no match or empty query.
 function M.match_indices(query, text, opts)
   return backend().match_indices(query, text, opts)

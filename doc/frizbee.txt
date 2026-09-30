@@ -80,9 +80,20 @@ Options (all optional):
   max_typos      integer|nil   Max allowed missing chars.  Default: 0.
                                nil = unlimited tolerance.
   limit          integer|nil   Max results to return.  Default: nil (all).
-  sort           boolean|nil   Sort by score descending.  Default: true.
+  sort           string|nil    Result ordering.  Default: 'score'.
+                               'score'            score desc, index asc
+                               'score_reverse'    score desc, index desc
+                               'index'            input order
+                               'index_reverse'    reverse input order
   with_positions boolean|nil   Include match positions.  Default: false.
-  case_sensitive boolean|nil   Case-sensitive matching.  Default: false.
+  casing         string|nil    'smart' | 'ignore' | 'respect'.
+                               Default: 'smart' (ignore case unless the query
+                               contains an uppercase character).
+  matching       string|nil    'fuzzy' | 'exact' | 'prefix' | 'suffix' |
+                               'substring'.  Default: 'fuzzy'.  Literal
+                               modes ignore max_typos.
+  unicode        string|nil    'smart' | 'ignore' | 'always'.
+                               Default: 'smart'.
 
 Returns: `table[]` — array of match tables: >lua
   {
@@ -116,15 +127,15 @@ Return 1-based match positions for a single query/text pair.
 Parameters:
   {query}   string     The search query.
   {text}    string     A single candidate string.
-  {opts}    table|nil  Same options as |frizbee.match| (only max_typos and
-                       case_sensitive are relevant).
+  {opts}    table|nil  Same options as |frizbee.match| (only max_typos,
+                       casing, matching and unicode are relevant).
 
-Returns: `integer[]` of 1-based positions, or `nil` if no match or the query
-is empty.
+Returns: `integer[]` of 1-based positions in reverse match order, or `nil` if
+no match or the query is empty.
 
 Example: >lua
   local pos = frizbee.match_indices("fb", "fooBar")
-  -- pos = { 1, 4 }
+  -- pos = { 4, 1 }
 <
 ------------------------------------------------------------------------------
 4.3  health()                                                  *frizbee.health*
@@ -140,7 +151,8 @@ Returns on success: >lua
     backend  = "rust",
     module   = "frizbee_nvim",
     version  = "0.1.0",
-    features = { "fuzzy_match", "match_indices", "case_sensitive",
+    features = { "fuzzy_match", "match_indices", "casing",
+                 "matching_modes", "unicode_matching", "sort_strategies",
                  "typo_tolerance" },
   }
 <
